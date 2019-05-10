@@ -1,5 +1,7 @@
 *.avi
 *.png
 *.mp4
+*.jpg
 *.sw*
+Faces/greetings.txt
 *.pickle
