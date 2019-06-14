@@ -1,10 +1,11 @@
-import face_recognition
 import dlib
+import face_recognition
 import pickle
 import re
 import cv2
 import numpy as np
 
+from collections import defaultdict
 
 import pyttsx3 as pyttsx
 import time
@@ -16,6 +17,7 @@ import datetime
 from gtts import gTTS
 from vlc import MediaPlayer
 
+
 video_capture = cv2.VideoCapture(0)
 
 known_face_encodings = []
@@ -26,6 +28,7 @@ greetings = {}
 PREFIX = "Ola"
 LANGUAGE = "pt"
 
+CONSECUTIVE_FRAME_FILTER= 5
 
 p = MediaPlayer()
 cv2.namedWindow("Video", cv2.WINDOW_AUTOSIZE | cv2.WINDOW_NORMAL)
@@ -70,7 +73,12 @@ def load_greetings(file):
             tokens = line.split(":")
             name = tokens[0]
             greet = ":".join(tokens[1:])
-            if name not in greetings or greetings[name]!=greet:
+
+            if name not in greetings:
+                greetings[name] = greet
+                if not os.path.isfile(os.path.join("/tmp", name+".mp3")):
+                    write_audio(name)
+            elif greetings[name]!=greet:
                 greetings[name] = greet
                 write_audio(name)
 
@@ -82,6 +90,8 @@ def load_person(name, encoding):
     if name not in greetings:
         greetings[name] = PREFIX+"{name}"
         write_audio(name=name)
+        write_greetings("Faces/greetings.txt")
+
 
 def write_audio(name):
     tts = gTTS(text=greetings[name].format(name=name),
@@ -99,7 +109,12 @@ def update_people(folder):
             load_person(name, encoding)
 
 
-known_face_encodings, known_face_names=load_state()
+known_face_encodings, known_face_names = load_state()
+
+last_faceNames = {}
+
+faces_count = defaultdict(int)
+
 while True:
     if time.time() - lastUpdate > 3:
         update_people("Faces")
@@ -122,27 +137,28 @@ while True:
         face_locations = face_recognition.face_locations(
             rgb_small_frame, model='cnn')
         face_encodings = face_recognition.face_encodings(
-            rgb_small_frame, face_locations, num_jitters=2)
+            rgb_small_frame, face_locations, num_jitters=3)
 
         face_names = []
         for face_encoding in face_encodings:
             # See if the face is a match for the known face(s)
             matches = face_recognition.compare_faces(
-                known_face_encodings, face_encoding, tolerance=0.5)
+                known_face_encodings, face_encoding, tolerance=0.6)
             name = "Unknown"
 
-            # # If a match was found in known_face_encodings, just use the first one.
-            # if True in matches:
-            #     first_match_index = matches.index(True)
-            #     name = known_face_names[first_match_index]
-
-            # Or instead, use the known face with the smallest distance to the new face
+            # use the known face with the smallest distance to the new face
             face_distances = face_recognition.face_distance(
                 known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
             if matches[best_match_index]:
                 name = known_face_names[best_match_index]
-                if time.time()-saidTime > 5 or (name != saidName and time.time()-saidTime > 1) and not p.is_playing():
+
+                condition = time.time()-saidTime > 5
+                condition = condition or (
+                    name != saidName and time.time()-saidTime > 1)
+                condition = condition and not p.is_playing()
+                condition = condition and faces_count[name] > CONSECUTIVE_FRAME_FILTER
+                if condition:
 
                     horas = datetime.datetime.now().hour
                     # text = re.escape(text)
@@ -159,6 +175,14 @@ while True:
                     saidName = name
 
             face_names.append(name)
+
+        for face in face_names:
+            if face in last_faceNames:
+                faces_count[name] += 1
+            else:
+                faces_count[name] = 0
+
+        last_faceNames = set(face_names)
 
     process_this_frame = not process_this_frame
 
